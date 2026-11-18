@@ -1,0 +1,119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function email() { return signedIn() ? request.auth.token.email : null; }
+    function hasAdminUid() { return signedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)); }
+    function hasAdminEmailDoc() { return signedIn() && email() != null && exists(/databases/$(database)/documents/admins/$(email())); }
+    function hasAdminRole() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    function isAdmin() { return hasAdminUid() || hasAdminEmailDoc() || hasAdminRole(); }
+    function ownsByEmail() { return signedIn() && email() != null && resource.data.email == email(); }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow update: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow delete: if isAdmin();
+    }
+
+    match /admins/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Existing examination collections.
+    match /categories/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /questions/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /rollNumber/{id} { allow read: if true; allow write: if isAdmin(); }
+
+    // Existing e-book collections shown in the Firebase console.
+    match /BookCategory/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /BookFile/{id} { allow read: if true; allow write: if isAdmin(); }
+
+    // Existing job portal collections.
+    match /jobPosts/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /jobApplications/{id} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow update, delete: if isAdmin();
+    }
+    match /jobApplicants/{id} {
+      allow create: if signedIn() && request.resource.data.email == email();
+      allow read, update, delete: if isAdmin();
+    }
+    // Some older builds used this casing/name.
+    match /jobapplicantsDetails/{id} {
+      allow create: if signedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    // Existing community posts collection.
+    match /posts/{id} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.authorUid == request.auth.uid)
+        || (signedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likedBy','likesCount','updatedAt']));
+      allow delete: if isAdmin() || (signedIn() && resource.data.authorUid == request.auth.uid);
+
+      match /comments/{commentId} {
+        allow read: if true;
+        allow create: if signedIn();
+        allow update, delete: if isAdmin() || (signedIn() && resource.data.authorUid == request.auth.uid);
+      }
+    }
+
+    // Backward compatibility for older TroopersTalk builds.
+    match /troopersPosts/{id} {
+      allow read: if true;
+      allow create: if signedIn();
+      allow update, delete: if isAdmin() || signedIn();
+    }
+
+    match /scores/{id} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      // Old score docs have email but no userId; new docs contain both.
+      allow read: if isAdmin() || (signedIn() && (resource.data.userId == request.auth.uid || ownsByEmail()));
+      allow update, delete: if isAdmin();
+    }
+
+    match /userAnswers/{id} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isAdmin() || (signedIn() && (resource.data.userId == request.auth.uid || ownsByEmail()));
+      allow update, delete: if isAdmin();
+    }
+
+    match /roadmaps/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /portfolioPosts/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /ebooks/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /vacancies/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /Languages/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /QuestionBankCategory/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /QuestionBankSubCategory/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /careerCat/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /course/{id} { allow read: if true; allow write: if isAdmin(); }
+
+    match /internshipEnroll/{id} {
+      allow create: if signedIn();
+      allow read, update, delete: if isAdmin();
+    }
+
+    match /tech_snake_rooms/{id} { allow read: if true; allow write: if isAdmin(); }
+    match /tech_snake_scores/{id} { allow read: if true; allow create: if signedIn(); allow update, delete: if isAdmin(); }
+
+    // Language/content collections such as C, C++, Java, JavaScript and Python.
+    match /{collectionName}/{docId} {
+      allow read: if collectionName in ['C','C++','Java','JavaScript','Python','Categories'];
+      allow write: if isAdmin();
+    }
+
+    // Everything else is private to administrators.
+    match /{document=**} {
+      allow read, write: if isAdmin();
+    }
+  }
+}

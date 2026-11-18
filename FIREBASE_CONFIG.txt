@@ -1,0 +1,10 @@
+TechTroopers Firebase Web Configuration
+=======================================
+apiKey: AIzaSyDoO4XVTBtYfbaYoGif0fyApKbva8FR9l0
+authDomain: universal-9b6da.firebaseapp.com
+projectId: universal-9b6da
+storageBucket: universal-9b6da.firebasestorage.app
+messagingSenderId: 390477196646
+appId: 1:390477196646:web:69a435fd7506dd27c8aca7
+
+These are Firebase Web client configuration values. Access control is enforced with Firebase Auth and Security Rules.

@@ -1,0 +1,36 @@
+TECHTROOPERS LMS - FIREBASE COMPATIBILITY BUILD
+================================================
+
+Runtime: React 18 + Vite 5 + Firebase 11
+Firebase project configured: universal-9b6da
+
+FIXED AGAINST THE CURRENT FIRESTORE SCREENSHOTS
+- E-books now read/write BookCategory + BookFile.
+- Exams match categories.name/category (e.g. JAVA-UT1) to questions.category.
+- Exam total marks falls back to numQuestions x marksPerQuestion when totalMarks is 0.
+- Old scores that identify a user by email remain readable in the dashboard/admin pages.
+- Jobs use jobPosts + jobApplicants + jobApplications.
+- TroopersTalk uses posts.
+- Admin Firebase Data page exposes the other existing collections for inspection/export.
+- Global and admin font sizes were increased for readability.
+
+IMPORTANT FIREBASE STEP
+Deploy the included rules after extracting:
+  firebase deploy --only firestore:rules,storage
+
+Admin security rules work when the admin has either:
+  admins/{AUTH_UID}
+or
+  admins/{EMAIL}
+or
+  users/{AUTH_UID}.role == "admin"
+
+If your existing admins collection uses random auto IDs, keep those records if needed for old code,
+but ALSO create admins/{AUTH_UID} for the account that must manage Firestore through this portal.
+
+PACKAGES
+The complete package manifest is included in package.json. node_modules is not bundled because this
+generation environment cannot reach the npm registry. On a normal Windows machine:
+  npm install
+  npm start
+or double-click START_WINDOWS.bat.
