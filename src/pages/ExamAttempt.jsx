@@ -162,9 +162,6 @@ const shuffle = (items) => {
 
 const MAX_SECURITY_WARNINGS = 2;
 const SECURITY_EVENT_DEBOUNCE_MS = 1200;
-const SECURITY_HEARTBEAT_MS = 300;
-const VIEWPORT_SHRINK_RATIO = 0.68;
-const VIEWPORT_SCALE_LIMIT = 1.08;
 
 const isLikelyMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
@@ -475,21 +472,6 @@ export default function ExamAttempt() {
 
     useRef(null);
 
-  const inactiveEpisodeRef =
-
-    useRef(false);
-
-  const viewportBaselineRef =
-
-    useRef({
-      width: typeof window !== "undefined" ? window.innerWidth : 0,
-      height: typeof window !== "undefined" ? window.innerHeight : 0,
-    });
-
-  const lastViewportViolationRef =
-
-    useRef(0);
-
 
 
   /* =========================================================
@@ -543,70 +525,27 @@ export default function ExamAttempt() {
 
   /*
    * Best-effort browser hardening.
-   *
-   * This disables selection, long-press callouts, drag/drop,
-   * pinch/double-tap zoom gestures and browser text selection
-   * inside the exam page.
-   *
-   * IMPORTANT: a website still cannot directly disable the
-   * iPhone/Android hardware screenshot buttons or OS-level
-   * Siri/Gemini/Google Assistant. Those require native-app
-   * controls.
+   * This blocks selection/long-press callouts inside the webpage.
+   * It cannot disable hardware screenshot buttons or OS assistants.
    */
   useEffect(() => {
     if (result) return undefined;
 
-    const body = document.body;
-    const root = document.documentElement;
+    const previousUserSelect = document.body.style.userSelect;
+    const previousWebkitUserSelect = document.body.style.webkitUserSelect;
+    const previousTouchCallout = document.body.style.webkitTouchCallout;
 
-    const previous = {
-      bodyUserSelect: body.style.userSelect,
-      bodyWebkitUserSelect: body.style.webkitUserSelect,
-      bodyTouchCallout: body.style.webkitTouchCallout,
-      bodyOverscroll: body.style.overscrollBehavior,
-      bodyTouchAction: body.style.touchAction,
-      rootOverscroll: root.style.overscrollBehavior,
-    };
-
-    body.style.userSelect = "none";
-    body.style.webkitUserSelect = "none";
-    body.style.webkitTouchCallout = "none";
-    body.style.overscrollBehavior = "none";
-    body.style.touchAction = "pan-y";
-    root.style.overscrollBehavior = "none";
-
-    const clearSelection = () => {
-      try {
-        window.getSelection?.()?.removeAllRanges?.();
-      } catch {
-        // Selection APIs may be unavailable in some browsers.
-      }
-    };
-
-    const preventGesture = (event) => {
-      event.preventDefault();
-      clearSelection();
-    };
-
-    document.addEventListener("selectionchange", clearSelection);
-    document.addEventListener("gesturestart", preventGesture, { passive: false });
-    document.addEventListener("gesturechange", preventGesture, { passive: false });
-    document.addEventListener("gestureend", preventGesture, { passive: false });
+    document.body.style.userSelect = "none";
+    document.body.style.webkitUserSelect = "none";
+    document.body.style.webkitTouchCallout = "none";
 
     return () => {
-      body.style.userSelect = previous.bodyUserSelect;
-      body.style.webkitUserSelect = previous.bodyWebkitUserSelect;
-      body.style.webkitTouchCallout = previous.bodyTouchCallout;
-      body.style.overscrollBehavior = previous.bodyOverscroll;
-      body.style.touchAction = previous.bodyTouchAction;
-      root.style.overscrollBehavior = previous.rootOverscroll;
-
-      document.removeEventListener("selectionchange", clearSelection);
-      document.removeEventListener("gesturestart", preventGesture);
-      document.removeEventListener("gesturechange", preventGesture);
-      document.removeEventListener("gestureend", preventGesture);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.webkitUserSelect = previousWebkitUserSelect;
+      document.body.style.webkitTouchCallout = previousTouchCallout;
     };
   }, [result]);
+
 
 
   /* =========================================================
@@ -2056,17 +1995,10 @@ export default function ExamAttempt() {
 
      MOBILE / TAB / APP SWITCH / VOICE ASSISTANT MONITORING
 
-     The browser cannot receive a guaranteed event when Siri,
-     Gemini, Apple Intelligence or a hardware screenshot overlay
-     is displayed. So we combine:
-
-     - visibilitychange
-     - blur/focus
-     - pagehide/pageshow
-     - fullscreen exit
-     - continuous focus heartbeat
-     - VisualViewport shrink/zoom monitoring
-     - orientation changes
+     A website cannot directly disable Siri, Gemini, Google
+     Assistant or hardware screenshot buttons. The strongest
+     browser-level action is to mask the exam immediately when
+     focus/visibility is lost and count that as a violation.
 
   ========================================================= */
 
@@ -2084,11 +2016,10 @@ export default function ExamAttempt() {
           document.hasFocus() &&
           !submitted.current
         ) {
-          inactiveEpisodeRef.current = false;
           setSecurityMasked(false);
           setSecurityMessage("");
         }
-      }, 220);
+      }, 250);
     };
 
     const hideExam = (message) => {
@@ -2096,26 +2027,15 @@ export default function ExamAttempt() {
       setSecurityMasked(true);
     };
 
-    const registerInactiveEpisode = (reason, message = reason) => {
-      if (submitted.current) return;
-
-      hideExam(message);
-
-      if (inactiveEpisodeRef.current) {
-        return;
-      }
-
-      inactiveEpisodeRef.current = true;
-      registerSecurityViolation(reason);
-    };
-
     const handleVisibility = () => {
       if (submitted.current) return;
 
       if (document.hidden) {
-        registerInactiveEpisode(
-          "Tab/app switching or assistant overlay detected",
+        hideExam(
           "Exam content hidden because the page is no longer visible."
+        );
+        registerSecurityViolation(
+          "Tab/app switching or assistant overlay detected"
         );
       } else {
         revealIfSafe();
@@ -2126,7 +2046,7 @@ export default function ExamAttempt() {
       if (submitted.current) return;
 
       hideExam(
-        "Exam content hidden while the browser is out of focus."
+        "Exam content hidden while the window is out of focus."
       );
 
       window.setTimeout(() => {
@@ -2134,12 +2054,11 @@ export default function ExamAttempt() {
           !submitted.current &&
           (!document.hasFocus() || document.hidden)
         ) {
-          registerInactiveEpisode(
-            "Exam window lost focus",
-            "Another app, overlay or system assistant may have taken focus."
+          registerSecurityViolation(
+            "Exam window lost focus"
           );
         }
-      }, 180);
+      }, 250);
     };
 
     const handleFocus = () => {
@@ -2149,14 +2068,8 @@ export default function ExamAttempt() {
     const handlePageHide = () => {
       if (submitted.current) return;
 
-      registerInactiveEpisode(
-        "Exam page/app was left",
-        "Exam page is being left."
-      );
-    };
-
-    const handlePageShow = () => {
-      revealIfSafe();
+      hideExam("Exam page is being left.");
+      registerSecurityViolation("Exam page/app was left");
     };
 
     const handleFullscreen = () => {
@@ -2168,113 +2081,11 @@ export default function ExamAttempt() {
         !active &&
         !submitted.current
       ) {
-        registerInactiveEpisode(
-          "Fullscreen exited",
-          "Fullscreen was exited."
-        );
+        hideExam("Fullscreen was exited.");
+        registerSecurityViolation("Fullscreen exited");
       }
 
       fullscreenWasActiveRef.current = active;
-    };
-
-    const viewportLooksSuspicious = () => {
-      const viewport = window.visualViewport;
-
-      if (!viewport) return false;
-
-      const baseline = viewportBaselineRef.current;
-
-      if (!baseline.width || !baseline.height) {
-        viewportBaselineRef.current = {
-          width: Math.max(viewport.width, window.innerWidth),
-          height: Math.max(viewport.height, window.innerHeight),
-        };
-        return false;
-      }
-
-      const heightRatio = viewport.height / baseline.height;
-      const widthRatio = viewport.width / baseline.width;
-      const zoomed = viewport.scale > VIEWPORT_SCALE_LIMIT;
-      const severelyShrunk =
-        heightRatio < VIEWPORT_SHRINK_RATIO ||
-        widthRatio < VIEWPORT_SHRINK_RATIO;
-
-      return zoomed || severelyShrunk;
-    };
-
-    const handleViewportChange = () => {
-      if (submitted.current || document.hidden) return;
-
-      if (!viewportLooksSuspicious()) {
-        return;
-      }
-
-      const now = Date.now();
-
-      if (
-        now - lastViewportViolationRef.current <
-        SECURITY_EVENT_DEBOUNCE_MS
-      ) {
-        return;
-      }
-
-      lastViewportViolationRef.current = now;
-
-      hideExam(
-        "The visible exam area changed unexpectedly. Return to the normal exam view."
-      );
-
-      registerSecurityViolation(
-        "Suspicious screen overlay/zoom detected"
-      );
-    };
-
-    const handleOrientationChange = () => {
-      if (submitted.current) return;
-
-      hideExam(
-        "Screen orientation changed during the examination."
-      );
-
-      registerSecurityViolation(
-        "Screen orientation changed"
-      );
-
-      window.setTimeout(() => {
-        viewportBaselineRef.current = {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        };
-        revealIfSafe();
-      }, 700);
-    };
-
-    /*
-     * Security heartbeat. Some mobile system overlays do not
-     * reliably dispatch blur/visibilitychange events, so polling
-     * document.hasFocus() gives us an additional signal.
-     */
-    const heartbeat = window.setInterval(() => {
-      if (submitted.current || result) return;
-
-      if (document.hidden || !document.hasFocus()) {
-        registerInactiveEpisode(
-          "Exam focus/security heartbeat failed",
-          "Exam hidden because the browser is not the active foreground view."
-        );
-        return;
-      }
-
-      if (!securityMasked) {
-        inactiveEpisodeRef.current = false;
-      }
-    }, SECURITY_HEARTBEAT_MS);
-
-    const visualViewport = window.visualViewport;
-
-    viewportBaselineRef.current = {
-      width: visualViewport?.width || window.innerWidth,
-      height: visualViewport?.height || window.innerHeight,
     };
 
     document.addEventListener("visibilitychange", handleVisibility);
@@ -2282,23 +2093,13 @@ export default function ExamAttempt() {
     window.addEventListener("blur", handleBlur);
     window.addEventListener("focus", handleFocus);
     window.addEventListener("pagehide", handlePageHide);
-    window.addEventListener("pageshow", handlePageShow);
-    window.addEventListener("orientationchange", handleOrientationChange);
-    visualViewport?.addEventListener("resize", handleViewportChange);
-    visualViewport?.addEventListener("scroll", handleViewportChange);
 
     return () => {
-      window.clearInterval(heartbeat);
-
       document.removeEventListener("visibilitychange", handleVisibility);
       document.removeEventListener("fullscreenchange", handleFullscreen);
       window.removeEventListener("blur", handleBlur);
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("pagehide", handlePageHide);
-      window.removeEventListener("pageshow", handlePageShow);
-      window.removeEventListener("orientationchange", handleOrientationChange);
-      visualViewport?.removeEventListener("resize", handleViewportChange);
-      visualViewport?.removeEventListener("scroll", handleViewportChange);
 
       if (focusRestoreTimerRef.current) {
         clearTimeout(focusRestoreTimerRef.current);
@@ -2307,8 +2108,8 @@ export default function ExamAttempt() {
   }, [
     registerSecurityViolation,
     result,
-    securityMasked,
   ]);
+
 
 
   /* =========================================================
@@ -2963,12 +2764,6 @@ export default function ExamAttempt() {
 
 
 
-  const watermarkText =
-
-    `${session?.rollNumber || user?.rollNumber || user?.email || "Candidate"} • ${exam?.title || exam?.category || "Exam"}`;
-
-
-
   /* =========================================================
 
      EXAM
@@ -3031,52 +2826,6 @@ export default function ExamAttempt() {
           opacity: .8;
         }
 
-        .exam-watermark-layer {
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
-          pointer-events: none;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: repeat(3, minmax(180px, 1fr));
-          grid-auto-rows: 150px;
-          gap: 34px 18px;
-          padding: 40px 0;
-          opacity: .085;
-        }
-
-        .exam-watermark-item {
-          display: grid;
-          place-items: center;
-          transform: rotate(-24deg);
-          color: #0b4da2;
-          font-size: 14px;
-          font-weight: 800;
-          letter-spacing: .6px;
-          white-space: nowrap;
-        }
-
-        .attempt-page .question-panel h2,
-        .attempt-page .options-list,
-        .attempt-page .question-nav {
-          -webkit-touch-callout: none !important;
-          -webkit-user-select: none !important;
-          user-select: none !important;
-        }
-
-        @media (max-width: 768px) {
-          .exam-watermark-layer {
-            grid-template-columns: repeat(2, minmax(150px, 1fr));
-            grid-auto-rows: 125px;
-            gap: 24px 8px;
-            opacity: .075;
-          }
-
-          .exam-watermark-item {
-            font-size: 11px;
-          }
-        }
-
         @media print {
           html,
           body,
@@ -3087,16 +2836,6 @@ export default function ExamAttempt() {
           }
         }
       `}</style>
-
-      {!result && (
-        <div className="exam-watermark-layer" aria-hidden="true">
-          {Array.from({ length: 24 }).map((_, index) => (
-            <span className="exam-watermark-item" key={index}>
-              {watermarkText}
-            </span>
-          ))}
-        </div>
-      )}
 
       {securityMasked && !result && (
         <div className="exam-privacy-shield" aria-live="assertive">
@@ -3151,10 +2890,8 @@ export default function ExamAttempt() {
 
             {mobileDevice && (
               <small className="exam-mobile-security-note d-block">
-                Leaving this screen, changing apps, abnormal overlay/zoom,
-                or an assistant taking browser focus will count as a warning.
-                Hardware screenshots and OS assistants cannot be fully blocked
-                by Safari/Chrome; candidate watermarking is enabled.
+                Leaving this screen, opening another app, or invoking an
+                assistant that removes focus will count as an exam warning.
               </small>
             )}
 
