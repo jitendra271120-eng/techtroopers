@@ -161,27 +161,7 @@ const shuffle = (items) => {
 };
 
 const MAX_SECURITY_WARNINGS = 2;
-
-/*
- * IMPORTANT:
- * Mobile Safari/Chrome may briefly lose focus while React changes
- * route, the address bar collapses, the page becomes interactive,
- * or fullscreen UI is prepared. Do not count those normal startup
- * transitions as exam violations.
- */
-const SECURITY_STARTUP_GRACE_MS = 5000;
-const SECURITY_EVENT_DEBOUNCE_MS = 1800;
-const SECURITY_HEARTBEAT_MS = 300;
-
-/*
- * A focus failure must remain present for several heartbeat cycles
- * before it becomes a warning.
- * 4 x 300ms = about 1.2 seconds of continuous focus loss.
- */
-const FOCUS_FAILURE_THRESHOLD = 4;
-
-const VIEWPORT_SHRINK_RATIO = 0.62;
-const VIEWPORT_SCALE_LIMIT = 1.15;
+const SECURITY_EVENT_DEBOUNCE_MS = 1200;
 
 const isLikelyMobileDevice = () => {
   if (typeof navigator === "undefined") return false;
@@ -492,42 +472,6 @@ export default function ExamAttempt() {
 
     useRef(null);
 
-  const inactiveEpisodeRef =
-
-    useRef(false);
-
-  const viewportBaselineRef =
-
-    useRef({
-      width: typeof window !== "undefined" ? window.innerWidth : 0,
-      height: typeof window !== "undefined" ? window.innerHeight : 0,
-    });
-
-  const lastViewportViolationRef =
-
-    useRef(0);
-
-  /*
-   * Security is intentionally NOT armed immediately.
-   * This prevents the Start Exam navigation itself from creating
-   * false warnings on Safari/Chrome mobile.
-   */
-  const securityArmedRef =
-
-    useRef(false);
-
-  const securityArmTimerRef =
-
-    useRef(null);
-
-  const consecutiveFocusFailuresRef =
-
-    useRef(0);
-
-  const autoSubmitScheduledRef =
-
-    useRef(false);
-
 
 
   /* =========================================================
@@ -566,74 +510,6 @@ export default function ExamAttempt() {
     warningsRef.current = warnings;
   }, [warnings]);
 
-  /* =========================================================
-     ARM SECURITY AFTER STARTUP GRACE PERIOD
-
-     The exam must be loaded and visible first. This avoids false
-     warnings caused by the Start Exam button, route transition,
-     mobile browser toolbar animation and initial focus settling.
-  ========================================================= */
-
-  useEffect(() => {
-    if (
-      result ||
-      !exam ||
-      !questionSet.length ||
-      questionsLoading
-    ) {
-      return undefined;
-    }
-
-    securityArmedRef.current = false;
-    consecutiveFocusFailuresRef.current = 0;
-    inactiveEpisodeRef.current = false;
-    autoSubmitScheduledRef.current = false;
-
-    setSecurityMasked(false);
-    setSecurityMessage("");
-
-    if (securityArmTimerRef.current) {
-      window.clearTimeout(securityArmTimerRef.current);
-    }
-
-    securityArmTimerRef.current = window.setTimeout(() => {
-      if (submitted.current || result) {
-        return;
-      }
-
-      /*
-       * Record the real state at the moment security becomes active.
-       * This prevents the initial fullscreen state from being treated
-       * as "fullscreen exited".
-       */
-      fullscreenWasActiveRef.current =
-        Boolean(document.fullscreenElement);
-
-      const viewport = window.visualViewport;
-
-      viewportBaselineRef.current = {
-        width: viewport?.width || window.innerWidth,
-        height: viewport?.height || window.innerHeight,
-      };
-
-      consecutiveFocusFailuresRef.current = 0;
-      inactiveEpisodeRef.current = false;
-      securityArmedRef.current = true;
-    }, SECURITY_STARTUP_GRACE_MS);
-
-    return () => {
-      if (securityArmTimerRef.current) {
-        window.clearTimeout(securityArmTimerRef.current);
-        securityArmTimerRef.current = null;
-      }
-    };
-  }, [
-    exam,
-    questionSet.length,
-    questionsLoading,
-    result,
-  ]);
-
   useEffect(() => {
     const updateDeviceType = () => {
       setMobileDevice(isLikelyMobileDevice());
@@ -649,70 +525,27 @@ export default function ExamAttempt() {
 
   /*
    * Best-effort browser hardening.
-   *
-   * This disables selection, long-press callouts, drag/drop,
-   * pinch/double-tap zoom gestures and browser text selection
-   * inside the exam page.
-   *
-   * IMPORTANT: a website still cannot directly disable the
-   * iPhone/Android hardware screenshot buttons or OS-level
-   * Siri/Gemini/Google Assistant. Those require native-app
-   * controls.
+   * This blocks selection/long-press callouts inside the webpage.
+   * It cannot disable hardware screenshot buttons or OS assistants.
    */
   useEffect(() => {
     if (result) return undefined;
 
-    const body = document.body;
-    const root = document.documentElement;
+    const previousUserSelect = document.body.style.userSelect;
+    const previousWebkitUserSelect = document.body.style.webkitUserSelect;
+    const previousTouchCallout = document.body.style.webkitTouchCallout;
 
-    const previous = {
-      bodyUserSelect: body.style.userSelect,
-      bodyWebkitUserSelect: body.style.webkitUserSelect,
-      bodyTouchCallout: body.style.webkitTouchCallout,
-      bodyOverscroll: body.style.overscrollBehavior,
-      bodyTouchAction: body.style.touchAction,
-      rootOverscroll: root.style.overscrollBehavior,
-    };
-
-    body.style.userSelect = "none";
-    body.style.webkitUserSelect = "none";
-    body.style.webkitTouchCallout = "none";
-    body.style.overscrollBehavior = "none";
-    body.style.touchAction = "pan-y";
-    root.style.overscrollBehavior = "none";
-
-    const clearSelection = () => {
-      try {
-        window.getSelection?.()?.removeAllRanges?.();
-      } catch {
-        // Selection APIs may be unavailable in some browsers.
-      }
-    };
-
-    const preventGesture = (event) => {
-      event.preventDefault();
-      clearSelection();
-    };
-
-    document.addEventListener("selectionchange", clearSelection);
-    document.addEventListener("gesturestart", preventGesture, { passive: false });
-    document.addEventListener("gesturechange", preventGesture, { passive: false });
-    document.addEventListener("gestureend", preventGesture, { passive: false });
+    document.body.style.userSelect = "none";
+    document.body.style.webkitUserSelect = "none";
+    document.body.style.webkitTouchCallout = "none";
 
     return () => {
-      body.style.userSelect = previous.bodyUserSelect;
-      body.style.webkitUserSelect = previous.bodyWebkitUserSelect;
-      body.style.webkitTouchCallout = previous.bodyTouchCallout;
-      body.style.overscrollBehavior = previous.bodyOverscroll;
-      body.style.touchAction = previous.bodyTouchAction;
-      root.style.overscrollBehavior = previous.rootOverscroll;
-
-      document.removeEventListener("selectionchange", clearSelection);
-      document.removeEventListener("gesturestart", preventGesture);
-      document.removeEventListener("gesturechange", preventGesture);
-      document.removeEventListener("gestureend", preventGesture);
+      document.body.style.userSelect = previousUserSelect;
+      document.body.style.webkitUserSelect = previousWebkitUserSelect;
+      document.body.style.webkitTouchCallout = previousTouchCallout;
     };
   }, [result]);
+
 
 
   /* =========================================================
@@ -1190,8 +1023,6 @@ export default function ExamAttempt() {
         submitted.current =
 
           true;
-
-        autoSubmitScheduledRef.current = false;
 
 
 
@@ -1906,16 +1737,7 @@ export default function ExamAttempt() {
   const registerSecurityViolation =
     useCallback(
       (reason) => {
-        /*
-         * Never punish the normal Start Exam transition.
-         */
-        if (
-          !securityArmedRef.current ||
-          submitted.current ||
-          result
-        ) {
-          return;
-        }
+        if (submitted.current || result) return;
 
         const now = Date.now();
 
@@ -1928,21 +1750,8 @@ export default function ExamAttempt() {
 
         lastSecurityViolationRef.current = now;
 
-        const previous = warningsRef.current;
-
-        /*
-         * Do not keep registering the same final warning while an
-         * automatic submission is already scheduled.
-         */
-        if (
-          previous >= MAX_SECURITY_WARNINGS ||
-          autoSubmitScheduledRef.current
-        ) {
-          return;
-        }
-
         const next = Math.min(
-          previous + 1,
+          warningsRef.current + 1,
           MAX_SECURITY_WARNINGS
         );
 
@@ -1955,16 +1764,12 @@ export default function ExamAttempt() {
         );
 
         if (next >= MAX_SECURITY_WARNINGS) {
-          autoSubmitScheduledRef.current = true;
-
-          window.setTimeout(() => {
-            if (!submitted.current) {
-              submitExam(
-                true,
-                reason || "Violation limit reached"
-              );
-            }
-          }, 250);
+          setTimeout(() => {
+            submitExam(
+              true,
+              reason || "Violation limit reached"
+            );
+          }, 80);
         }
       },
       [result, submitExam]
@@ -2190,12 +1995,10 @@ export default function ExamAttempt() {
 
      MOBILE / TAB / APP SWITCH / VOICE ASSISTANT MONITORING
 
-     FIXED VERSION:
-     - no warning during initial Start Exam navigation
-     - requires persistent focus loss
-     - ignores expected mobile Safari viewport animation
-     - prevents one event from causing two warnings
-     - auto-submit can be scheduled only once
+     A website cannot directly disable Siri, Gemini, Google
+     Assistant or hardware screenshot buttons. The strongest
+     browser-level action is to mask the exam immediately when
+     focus/visibility is lost and count that as a violation.
 
   ========================================================= */
 
@@ -2204,74 +2007,35 @@ export default function ExamAttempt() {
 
     const revealIfSafe = () => {
       if (focusRestoreTimerRef.current) {
-        window.clearTimeout(
-          focusRestoreTimerRef.current
-        );
+        clearTimeout(focusRestoreTimerRef.current);
       }
 
-      focusRestoreTimerRef.current =
-        window.setTimeout(() => {
-          if (
-            !document.hidden &&
-            document.hasFocus() &&
-            !submitted.current
-          ) {
-            consecutiveFocusFailuresRef.current = 0;
-            inactiveEpisodeRef.current = false;
-
-            if (securityArmedRef.current) {
-              setSecurityMasked(false);
-              setSecurityMessage("");
-            }
-          }
-        }, 300);
+      focusRestoreTimerRef.current = window.setTimeout(() => {
+        if (
+          !document.hidden &&
+          document.hasFocus() &&
+          !submitted.current
+        ) {
+          setSecurityMasked(false);
+          setSecurityMessage("");
+        }
+      }, 250);
     };
 
     const hideExam = (message) => {
-      if (!securityArmedRef.current) {
-        return;
-      }
-
       setSecurityMessage(message);
       setSecurityMasked(true);
     };
 
-    const registerInactiveEpisode = (
-      reason,
-      message = reason
-    ) => {
-      if (
-        submitted.current ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
-
-      hideExam(message);
-
-      /*
-       * One continuous focus-loss episode = one warning.
-       */
-      if (inactiveEpisodeRef.current) {
-        return;
-      }
-
-      inactiveEpisodeRef.current = true;
-      registerSecurityViolation(reason);
-    };
-
     const handleVisibility = () => {
-      if (
-        submitted.current ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
+      if (submitted.current) return;
 
       if (document.hidden) {
-        registerInactiveEpisode(
-          "Tab/app switching detected",
+        hideExam(
           "Exam content hidden because the page is no longer visible."
+        );
+        registerSecurityViolation(
+          "Tab/app switching or assistant overlay detected"
         );
       } else {
         revealIfSafe();
@@ -2279,379 +2043,73 @@ export default function ExamAttempt() {
     };
 
     const handleBlur = () => {
-      if (
-        submitted.current ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
+      if (submitted.current) return;
 
-      /*
-       * Do not warn immediately on blur.
-       * Mobile Safari can emit a tiny temporary blur while its own
-       * browser chrome changes. The heartbeat below confirms whether
-       * focus is genuinely lost.
-       */
       hideExam(
-        "Exam content temporarily hidden while focus is being checked."
+        "Exam content hidden while the window is out of focus."
       );
+
+      window.setTimeout(() => {
+        if (
+          !submitted.current &&
+          (!document.hasFocus() || document.hidden)
+        ) {
+          registerSecurityViolation(
+            "Exam window lost focus"
+          );
+        }
+      }, 250);
     };
 
     const handleFocus = () => {
-      consecutiveFocusFailuresRef.current = 0;
       revealIfSafe();
     };
 
     const handlePageHide = () => {
-      if (
-        submitted.current ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
+      if (submitted.current) return;
 
-      registerInactiveEpisode(
-        "Exam page/app was left",
-        "Exam page is being left."
-      );
-    };
-
-    const handlePageShow = () => {
-      consecutiveFocusFailuresRef.current = 0;
-      revealIfSafe();
+      hideExam("Exam page is being left.");
+      registerSecurityViolation("Exam page/app was left");
     };
 
     const handleFullscreen = () => {
-      const active =
-        Boolean(document.fullscreenElement);
-
+      const active = Boolean(document.fullscreenElement);
       setFullscreen(active);
-
-      /*
-       * Always synchronize the state, but only count an exit after
-       * security has been armed.
-       */
-      if (!securityArmedRef.current) {
-        fullscreenWasActiveRef.current =
-          active;
-        return;
-      }
 
       if (
         fullscreenWasActiveRef.current &&
         !active &&
         !submitted.current
       ) {
-        registerInactiveEpisode(
-          "Fullscreen exited",
-          "Fullscreen was exited."
-        );
+        hideExam("Fullscreen was exited.");
+        registerSecurityViolation("Fullscreen exited");
       }
 
-      fullscreenWasActiveRef.current =
-        active;
+      fullscreenWasActiveRef.current = active;
     };
 
-    const viewportLooksSuspicious = () => {
-      const viewport =
-        window.visualViewport;
-
-      if (!viewport) {
-        return false;
-      }
-
-      const baseline =
-        viewportBaselineRef.current;
-
-      if (
-        !baseline.width ||
-        !baseline.height
-      ) {
-        viewportBaselineRef.current = {
-          width:
-            viewport.width ||
-            window.innerWidth,
-          height:
-            viewport.height ||
-            window.innerHeight,
-        };
-
-        return false;
-      }
-
-      const heightRatio =
-        viewport.height /
-        baseline.height;
-
-      const widthRatio =
-        viewport.width /
-        baseline.width;
-
-      const zoomed =
-        viewport.scale >
-        VIEWPORT_SCALE_LIMIT;
-
-      const severelyShrunk =
-        heightRatio <
-          VIEWPORT_SHRINK_RATIO ||
-        widthRatio <
-          VIEWPORT_SHRINK_RATIO;
-
-      return zoomed || severelyShrunk;
-    };
-
-    const handleViewportChange = () => {
-      if (
-        submitted.current ||
-        document.hidden ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
-
-      /*
-       * Safari's address bar appearing/disappearing causes ordinary
-       * viewport changes. Only severe/zoomed changes count.
-       */
-      if (!viewportLooksSuspicious()) {
-        return;
-      }
-
-      const now = Date.now();
-
-      if (
-        now -
-          lastViewportViolationRef.current <
-        SECURITY_EVENT_DEBOUNCE_MS
-      ) {
-        return;
-      }
-
-      lastViewportViolationRef.current =
-        now;
-
-      hideExam(
-        "The visible exam area changed unexpectedly. Return to the normal exam view."
-      );
-
-      registerSecurityViolation(
-        "Suspicious screen overlay/zoom detected"
-      );
-    };
-
-    const handleOrientationChange = () => {
-      if (
-        submitted.current ||
-        !securityArmedRef.current
-      ) {
-        return;
-      }
-
-      /*
-       * Rotation itself should not instantly submit an exam.
-       * Rebuild the viewport baseline instead of counting rotation
-       * as a security warning.
-       */
-      securityArmedRef.current = false;
-      consecutiveFocusFailuresRef.current = 0;
-
-      window.setTimeout(() => {
-        const viewport =
-          window.visualViewport;
-
-        viewportBaselineRef.current = {
-          width:
-            viewport?.width ||
-            window.innerWidth,
-          height:
-            viewport?.height ||
-            window.innerHeight,
-        };
-
-        fullscreenWasActiveRef.current =
-          Boolean(
-            document.fullscreenElement
-          );
-
-        securityArmedRef.current = true;
-        revealIfSafe();
-      }, 900);
-    };
-
-    /*
-     * Continuous heartbeat.
-     *
-     * IMPORTANT FIX:
-     * One failed document.hasFocus() check is NOT enough.
-     * The page must remain unfocused for several consecutive checks.
-     */
-    const heartbeat =
-      window.setInterval(() => {
-        if (
-          submitted.current ||
-          result ||
-          !securityArmedRef.current
-        ) {
-          consecutiveFocusFailuresRef.current = 0;
-          return;
-        }
-
-        const focusMissing =
-          document.hidden ||
-          !document.hasFocus();
-
-        if (focusMissing) {
-          consecutiveFocusFailuresRef.current += 1;
-
-          if (
-            consecutiveFocusFailuresRef.current >=
-            FOCUS_FAILURE_THRESHOLD
-          ) {
-            registerInactiveEpisode(
-              "Exam window lost focus",
-              "Another app, tab or system overlay took focus from the exam."
-            );
-          }
-
-          return;
-        }
-
-        consecutiveFocusFailuresRef.current = 0;
-
-        if (
-          inactiveEpisodeRef.current
-        ) {
-          inactiveEpisodeRef.current = false;
-        }
-
-        if (securityMasked) {
-          revealIfSafe();
-        }
-      }, SECURITY_HEARTBEAT_MS);
-
-    const visualViewport =
-      window.visualViewport;
-
-    /*
-     * Do not establish a violation baseline until the arming effect
-     * has completed. We only initialize a harmless fallback here.
-     */
-    if (
-      !viewportBaselineRef.current.width ||
-      !viewportBaselineRef.current.height
-    ) {
-      viewportBaselineRef.current = {
-        width:
-          visualViewport?.width ||
-          window.innerWidth,
-        height:
-          visualViewport?.height ||
-          window.innerHeight,
-      };
-    }
-
-    document.addEventListener(
-      "visibilitychange",
-      handleVisibility
-    );
-
-    document.addEventListener(
-      "fullscreenchange",
-      handleFullscreen
-    );
-
-    window.addEventListener(
-      "blur",
-      handleBlur
-    );
-
-    window.addEventListener(
-      "focus",
-      handleFocus
-    );
-
-    window.addEventListener(
-      "pagehide",
-      handlePageHide
-    );
-
-    window.addEventListener(
-      "pageshow",
-      handlePageShow
-    );
-
-    window.addEventListener(
-      "orientationchange",
-      handleOrientationChange
-    );
-
-    visualViewport?.addEventListener(
-      "resize",
-      handleViewportChange
-    );
-
-    /*
-     * Do not monitor VisualViewport "scroll".
-     * Safari moves the viewport while its own address/navigation bars
-     * animate, which created false positives in the previous version.
-     */
+    document.addEventListener("visibilitychange", handleVisibility);
+    document.addEventListener("fullscreenchange", handleFullscreen);
+    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("pagehide", handlePageHide);
 
     return () => {
-      window.clearInterval(heartbeat);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      document.removeEventListener("fullscreenchange", handleFullscreen);
+      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("pagehide", handlePageHide);
 
-      document.removeEventListener(
-        "visibilitychange",
-        handleVisibility
-      );
-
-      document.removeEventListener(
-        "fullscreenchange",
-        handleFullscreen
-      );
-
-      window.removeEventListener(
-        "blur",
-        handleBlur
-      );
-
-      window.removeEventListener(
-        "focus",
-        handleFocus
-      );
-
-      window.removeEventListener(
-        "pagehide",
-        handlePageHide
-      );
-
-      window.removeEventListener(
-        "pageshow",
-        handlePageShow
-      );
-
-      window.removeEventListener(
-        "orientationchange",
-        handleOrientationChange
-      );
-
-      visualViewport?.removeEventListener(
-        "resize",
-        handleViewportChange
-      );
-
-      if (
-        focusRestoreTimerRef.current
-      ) {
-        window.clearTimeout(
-          focusRestoreTimerRef.current
-        );
+      if (focusRestoreTimerRef.current) {
+        clearTimeout(focusRestoreTimerRef.current);
       }
     };
   }, [
     registerSecurityViolation,
     result,
-    securityMasked,
   ]);
+
 
 
   /* =========================================================
@@ -3306,12 +2764,6 @@ export default function ExamAttempt() {
 
 
 
-  const watermarkText =
-
-    `${session?.rollNumber || user?.rollNumber || user?.email || "Candidate"} • ${exam?.title || exam?.category || "Exam"}`;
-
-
-
   /* =========================================================
 
      EXAM
@@ -3374,52 +2826,6 @@ export default function ExamAttempt() {
           opacity: .8;
         }
 
-        .exam-watermark-layer {
-          position: fixed;
-          inset: 0;
-          z-index: 9999;
-          pointer-events: none;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: repeat(3, minmax(180px, 1fr));
-          grid-auto-rows: 150px;
-          gap: 34px 18px;
-          padding: 40px 0;
-          opacity: .085;
-        }
-
-        .exam-watermark-item {
-          display: grid;
-          place-items: center;
-          transform: rotate(-24deg);
-          color: #0b4da2;
-          font-size: 14px;
-          font-weight: 800;
-          letter-spacing: .6px;
-          white-space: nowrap;
-        }
-
-        .attempt-page .question-panel h2,
-        .attempt-page .options-list,
-        .attempt-page .question-nav {
-          -webkit-touch-callout: none !important;
-          -webkit-user-select: none !important;
-          user-select: none !important;
-        }
-
-        @media (max-width: 768px) {
-          .exam-watermark-layer {
-            grid-template-columns: repeat(2, minmax(150px, 1fr));
-            grid-auto-rows: 125px;
-            gap: 24px 8px;
-            opacity: .075;
-          }
-
-          .exam-watermark-item {
-            font-size: 11px;
-          }
-        }
-
         @media print {
           html,
           body,
@@ -3430,16 +2836,6 @@ export default function ExamAttempt() {
           }
         }
       `}</style>
-
-      {!result && (
-        <div className="exam-watermark-layer" aria-hidden="true">
-          {Array.from({ length: 24 }).map((_, index) => (
-            <span className="exam-watermark-item" key={index}>
-              {watermarkText}
-            </span>
-          ))}
-        </div>
-      )}
 
       {securityMasked && !result && (
         <div className="exam-privacy-shield" aria-live="assertive">
@@ -3494,10 +2890,8 @@ export default function ExamAttempt() {
 
             {mobileDevice && (
               <small className="exam-mobile-security-note d-block">
-                Leaving this screen, changing apps, abnormal overlay/zoom,
-                or an assistant taking browser focus will count as a warning.
-                Hardware screenshots and OS assistants cannot be fully blocked
-                by Safari/Chrome; candidate watermarking is enabled.
+                Leaving this screen, opening another app, or invoking an
+                assistant that removes focus will count as an exam warning.
               </small>
             )}
 
