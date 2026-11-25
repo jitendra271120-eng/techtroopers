@@ -265,19 +265,6 @@ export default function ExamAttempt() {
     warningsRef.current = warnings;
   }, [warnings]);
 
-  const watermarkText = useMemo(() => {
-    const identity =
-      session?.rollNumber ||
-      user?.rollNumber ||
-      user?.email ||
-      user?.uid ||
-      "Candidate";
-
-    const examName = exam?.title || exam?.category || exam?.name || "Exam";
-
-    return `${identity} • ${examName}`;
-  }, [session, user, exam]);
-
   useEffect(() => {
     if (result || !exam || !questionSet.length || questionsLoading) {
       securityArmedRef.current = false;
@@ -1081,35 +1068,77 @@ export default function ExamAttempt() {
 
   const registerSecurityViolation = useCallback(
     (reason) => {
-      if (!securityArmedRef.current || submitted.current || result) return;
+      if (!securityArmedRef.current || submitted.current || result) {
+        return;
+      }
 
       const now = Date.now();
-      if (now - lastSecurityViolationRef.current < SECURITY_EVENT_DEBOUNCE_MS)
-        return;
 
-      if (autoSubmitScheduledRef.current) return;
+      if (now - lastSecurityViolationRef.current < SECURITY_EVENT_DEBOUNCE_MS) {
+        return;
+      }
+
+      if (autoSubmitScheduledRef.current) {
+        return;
+      }
 
       lastSecurityViolationRef.current = now;
 
       const previous = warningsRef.current;
-      if (previous >= MAX_SECURITY_WARNINGS) return;
+
+      if (previous >= MAX_SECURITY_WARNINGS) {
+        return;
+      }
 
       const next = Math.min(previous + 1, MAX_SECURITY_WARNINGS);
 
       warningsRef.current = next;
       setWarnings(next);
-      setSecurityMessage(reason);
 
-      toast.error(`Exam warning ${next}/${MAX_SECURITY_WARNINGS}: ${reason}`);
+      /*
+       * IMPORTANT:
+       *
+       * Warning 1/2:
+       * - Show warning only.
+       * - Do NOT cover/block the examination.
+       * - Student can continue.
+       *
+       * Warning 2/2:
+       * - Protect/block examination content.
+       * - Show the reason.
+       * - Auto-submit after a short visible delay.
+       */
+      if (next < MAX_SECURITY_WARNINGS) {
+        setSecurityMasked(false);
+        setSecurityMessage("");
 
-      if (next >= MAX_SECURITY_WARNINGS) {
-        autoSubmitScheduledRef.current = true;
-        window.setTimeout(() => {
-          if (!submitted.current) {
-            submitExam(true, reason || "Violation limit reached");
+        toast.error(
+          `Exam warning ${next}/${MAX_SECURITY_WARNINGS}: ${reason}. One more violation will submit your exam.`,
+          {
+            duration: 4500,
           }
-        }, 300);
+        );
+
+        return;
       }
+
+      setSecurityMessage(reason);
+      setSecurityMasked(true);
+
+      toast.error(
+        `Exam warning ${next}/${MAX_SECURITY_WARNINGS}: ${reason}. Exam is being submitted.`,
+        {
+          duration: 3000,
+        }
+      );
+
+      autoSubmitScheduledRef.current = true;
+
+      window.setTimeout(() => {
+        if (!submitted.current) {
+          submitExam(true, reason || "Violation limit reached");
+        }
+      }, 1500);
     },
     [result, submitExam]
   );
@@ -1202,18 +1231,19 @@ export default function ExamAttempt() {
 
     const handleScreenshotKey = (event) => {
       if (event.key !== "PrintScreen") return;
-      setSecurityMasked(true);
-      setSecurityMessage("Screenshot attempt detected.");
+
       try {
         navigator.clipboard?.writeText("");
-      } catch {}
+      } catch {
+        // Clipboard access may be unavailable.
+      }
+
       registerSecurityViolation("Screenshot/Print Screen attempt detected");
     };
 
     const handleBeforePrint = (event) => {
       event?.preventDefault?.();
-      setSecurityMasked(true);
-      setSecurityMessage("Printing is disabled during the exam.");
+
       registerSecurityViolation("Print attempt detected");
     };
 
@@ -1302,16 +1332,38 @@ export default function ExamAttempt() {
         if (!document.hidden && document.hasFocus() && !submitted.current) {
           consecutiveFocusFailuresRef.current = 0;
           inactiveEpisodeRef.current = false;
-          setSecurityMasked(false);
-          setSecurityMessage("");
+
+          /*
+           * After warning 1 the student may continue normally.
+           * Do not uncover a final 2/2 protection screen while
+           * automatic submission is pending.
+           */
+          if (
+            warningsRef.current < MAX_SECURITY_WARNINGS ||
+            !autoSubmitScheduledRef.current
+          ) {
+            setSecurityMasked(false);
+            setSecurityMessage("");
+          }
         }
       }, 350);
     };
 
     const hideExam = (message) => {
-      if (!securityArmedRef.current) return;
-      setSecurityMessage(message);
-      setSecurityMasked(true);
+      if (!securityArmedRef.current) {
+        return;
+      }
+
+      /*
+       * Do not block the screen for the FIRST warning.
+       * If one warning already exists, the next confirmed
+       * violation is the final (2/2) violation, so protecting
+       * the screen here is appropriate.
+       */
+      if (warningsRef.current >= MAX_SECURITY_WARNINGS - 1) {
+        setSecurityMessage(message);
+        setSecurityMasked(true);
+      }
     };
 
     const registerInactiveEpisode = (reason, message) => {
@@ -1820,31 +1872,6 @@ export default function ExamAttempt() {
 
         }
 
-        .exam-watermark-layer {
-          position: fixed;
-          inset: 0;
-          z-index: 20;
-          pointer-events: none;
-          overflow: hidden;
-          display: grid;
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          align-content: space-around;
-          gap: 40px 10px;
-          padding: 35px 10px;
-          opacity: .11;
-        }
-
-        .exam-watermark-item {
-          color: #0b1f3a;
-          font-size: clamp(11px, 2.4vw, 16px);
-          font-weight: 800;
-          letter-spacing: .3px;
-          text-align: center;
-          transform: rotate(-24deg);
-          white-space: nowrap;
-          text-shadow: 0 0 1px rgba(255,255,255,.45);
-        }
-
         .exam-security-status {
           display: inline-flex;
           align-items: center;
@@ -1891,16 +1918,6 @@ export default function ExamAttempt() {
 
       `}</style>
 
-      {!result && (
-        <div className="exam-watermark-layer" aria-hidden="true">
-          {Array.from({ length: 12 }).map((_, index) => (
-            <span className="exam-watermark-item" key={index}>
-              {watermarkText}
-            </span>
-          ))}
-        </div>
-      )}
-
       {securityMasked && !result && (
         <div className="exam-privacy-shield" aria-live="assertive">
           <div className="exam-privacy-shield-card">
@@ -1941,8 +1958,8 @@ export default function ExamAttempt() {
               <small className="exam-mobile-security-note d-block">
                 Copy, long-press, app switching, suspicious overlays,
                 multi-touch/zoom and detected assistant focus changes are
-                blocked or counted as violations. Screenshots remain possible at
-                OS level, but are watermarked.
+                blocked or counted as violations. Screenshots may still be
+                possible at OS level.
               </small>
             )}
           </span>
